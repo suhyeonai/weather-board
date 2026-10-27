@@ -2,6 +2,32 @@
 
 let tasks = [];
 let weatherByRegion = {};
+let taskClient;
+let tasksLoading = false;
+let taskSaving = false;
+
+function getTaskClient() {
+  if (taskClient) return taskClient;
+  if (typeof SUPABASE_URL === 'undefined' || !SUPABASE_URL ||
+      typeof SUPABASE_PUBLIC_KEY === 'undefined' || !SUPABASE_PUBLIC_KEY) {
+    throw new Error('config.js에 Supabase 주소와 공개용 키를 입력해 주세요.');
+  }
+  let publicKey = SUPABASE_PUBLIC_KEY.startsWith('sb_publishable_');
+  if (!publicKey) {
+    try {
+      const payload = SUPABASE_PUBLIC_KEY.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');
+      publicKey = JSON.parse(atob(payload)).role === 'anon';
+    } catch (error) {
+      publicKey = false;
+    }
+  }
+  if (!publicKey) throw new Error('config.js에는 publishable 또는 anon 공개용 키만 사용해 주세요.');
+  if (!window.supabase) throw new Error('Supabase 스크립트를 불러오지 못했습니다. 인터넷 연결을 확인해 주세요.');
+  taskClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_PUBLIC_KEY, {
+    auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+  });
+  return taskClient;
+}
 
 async function loadWeather() {
   const status = document.getElementById('weatherStatus');
@@ -32,35 +58,26 @@ async function loadWeather() {
   if (testWind) status.textContent += ' · 강풍 시험 모드: 수신한 풍속을 12m/s로 표시';
 }
 
-function readAddedTasks() {
-  try {
-    const saved = JSON.parse(localStorage.getItem('wx_added') || '[]');
-    return Array.isArray(saved) ? saved : [];
-  } catch (error) {
-    return [];
-  }
-}
-
 async function loadTasks() {
   const status = document.getElementById('taskStatus');
+  const button = document.getElementById('addTaskButton');
+  tasksLoading = true;
+  button.disabled = true;
   status.textContent = '일정 목록을 불러오는 중입니다.';
-  let baseTasks = [];
   try {
-    const response = await fetch('data/tasks.json');
-    if (!response.ok) throw new Error('일정 파일 요청 실패');
-    const data = await response.json();
-    if (!Array.isArray(data) || !data.every(task => task &&
-        ['title', 'region', 'kind', 'owner'].every(key => typeof task[key] === 'string'))) {
-      throw new Error('올바르지 않은 일정 데이터');
-    }
-    baseTasks = data;
+    const client = getTaskClient();
+    const { data, error } = await client.from('wx_tasks')
+      .select('id,title,region,kind,owner').order('id', { ascending: true });
+    if (error) throw new Error('일정을 불러오지 못했습니다. 연결 설정과 setup.sql 실행 여부를 확인하고 새로고침해 주세요.');
+    tasks = data;
     status.textContent = '';
   } catch (error) {
-    status.textContent = '일정 파일을 읽지 못했습니다. 배포 주소로 열어 주세요';
+    status.textContent = error.message;
+  } finally {
+    tasksLoading = false;
+    button.disabled = taskSaving;
+    renderTasks();
   }
-  // JSON을 먼저 읽고, 화면에서 추가해 브라우저에 저장한 일정만 뒤에 합칩니다.
-  tasks = baseTasks.concat(readAddedTasks());
-  renderTasks();
 }
 
 function weatherText(w) {
@@ -87,8 +104,9 @@ function renderTasks() {
   }
 }
 
-function addTask(e) {
+async function addTask(e) {
   e.preventDefault();
+  if (tasksLoading || taskSaving) return;
   const t = {
     title: document.getElementById('titleInput').value.trim(),
     region: document.getElementById('regionInput').value,
@@ -96,12 +114,42 @@ function addTask(e) {
     owner: document.getElementById('ownerInput').value.trim(),
   };
   if (!t.title || !t.owner) return;
-  const saved = readAddedTasks();
-  saved.push(t);
-  localStorage.setItem('wx_added', JSON.stringify(saved));
-  e.target.reset();
-  tasks.push(t);
-  renderTasks();
+  const form = e.target;
+  const button = document.getElementById('addTaskButton');
+  const message = document.getElementById('msgBox');
+  taskSaving = true;
+  button.disabled = true;
+  message.textContent = '일정을 저장하는 중입니다.';
+  try {
+    const client = getTaskClient();
+    const { data, error } = await client.from('wx_tasks').insert(t)
+      .select('id,title,region,kind,owner').single();
+    if (error) throw new Error('저장하지 못했습니다. 연결과 지역·구분 값을 확인한 뒤 다시 시도해 주세요.');
+    tasks.push(data);
+    form.reset();
+    renderTasks();
+    message.textContent = '일정을 저장했습니다.';
+  } catch (error) {
+    message.textContent = error.message;
+  } finally {
+    taskSaving = false;
+    button.disabled = tasksLoading;
+  }
+}
+
+function downloadJudgmentMarkdown() {
+  const rows = Array.from(document.getElementById('taskList').rows,
+    row => Array.from(row.cells, cell => cell.textContent));
+  const date = document.getElementById('todayDate').dateTime;
+  const markdown = buildJudgmentMarkdown(rows, date);
+  const url = URL.createObjectURL(new Blob([markdown], { type: 'text/markdown;charset=utf-8' }));
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = '현장일정_판단_' + date + '.md';
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 const today = new Date();
@@ -115,6 +163,7 @@ todayDate.textContent = todayText;
 todayDate.dateTime = todayText;
 
 document.getElementById('taskForm').addEventListener('submit', addTask);
+document.getElementById('downloadJudgment').addEventListener('click', downloadJudgmentMarkdown);
 loadTasks();
 renderTasks();
 loadWeather();
