@@ -11,7 +11,36 @@ const SAMPLE_TASKS = [
 ];
 
 let tasks = [];
-let weatherByRegion = {};   // 03 단원에서 지역별 날씨를 넣음
+let weatherByRegion = {};
+
+async function loadWeather() {
+  const status = document.getElementById('weatherStatus');
+  const testWind = new URLSearchParams(window.location.search).get('test') === 'wind';
+  const failed = [];
+  status.textContent = '오늘 날씨를 불러오는 중입니다.';
+
+  await Promise.all(Object.keys(REGIONS).map(async (region) => {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10000);
+    try {
+      const response = await fetch(buildWeatherUrl(region), { signal: controller.signal });
+      if (!response.ok) throw new Error('날씨 요청 실패');
+      const weather = parseWeatherResponse(await response.json());
+      if (testWind) weather.windMax = 12;
+      weatherByRegion[region] = weather;
+      renderTasks();
+    } catch (error) {
+      failed.push(region);
+    } finally {
+      clearTimeout(timeout);
+    }
+  }));
+
+  status.textContent = failed.length
+    ? '날씨를 불러오지 못한 지역: ' + failed.join(' · ') + '. 새로고침하여 다시 시도해 주세요.'
+    : '세종 · 대전 · 태안 · 보령의 오늘 날씨 (한국 시간 기준)';
+  if (testWind) status.textContent += ' · 강풍 시험 모드: 수신한 풍속을 12m/s로 표시';
+}
 
 function loadTasks() {
   const saved = JSON.parse(localStorage.getItem('wx_added') || '[]');
@@ -72,3 +101,4 @@ todayDate.dateTime = todayText;
 document.getElementById('taskForm').addEventListener('submit', addTask);
 loadTasks();
 renderTasks();
+loadWeather();
