@@ -1,15 +1,5 @@
 // app.js – 화면 동작 (목록 그리기, 일정 추가)
 
-// 01 단원 : 일정 목록을 코드 안에 둠 (가상 데이터) → 04 단원에서 data/tasks.json 으로 분리
-const SAMPLE_TASKS = [
-  { title: '다중이용시설 안전점검', region: '세종', kind: '야외', owner: '김안전' },
-  { title: '시민 안전체험 행사 운영', region: '보령', kind: '야외', owner: '이행사' },
-  { title: '옥상 태양광 설비 점검', region: '태안', kind: '고소', owner: '박설비' },
-  { title: '하천 수위계 확인', region: '대전', kind: '야외', owner: '최현장' },
-  { title: '청사 외벽 간판 보수', region: '세종', kind: '고소', owner: '정시설' },
-  { title: '비상연락 훈련', region: '대전', kind: '실내', owner: '한상황' },
-];
-
 let tasks = [];
 let weatherByRegion = {};
 
@@ -42,9 +32,35 @@ async function loadWeather() {
   if (testWind) status.textContent += ' · 강풍 시험 모드: 수신한 풍속을 12m/s로 표시';
 }
 
-function loadTasks() {
-  const saved = JSON.parse(localStorage.getItem('wx_added') || '[]');
-  tasks = SAMPLE_TASKS.concat(saved);
+function readAddedTasks() {
+  try {
+    const saved = JSON.parse(localStorage.getItem('wx_added') || '[]');
+    return Array.isArray(saved) ? saved : [];
+  } catch (error) {
+    return [];
+  }
+}
+
+async function loadTasks() {
+  const status = document.getElementById('taskStatus');
+  status.textContent = '일정 목록을 불러오는 중입니다.';
+  let baseTasks = [];
+  try {
+    const response = await fetch('data/tasks.json');
+    if (!response.ok) throw new Error('일정 파일 요청 실패');
+    const data = await response.json();
+    if (!Array.isArray(data) || !data.every(task => task &&
+        ['title', 'region', 'kind', 'owner'].every(key => typeof task[key] === 'string'))) {
+      throw new Error('올바르지 않은 일정 데이터');
+    }
+    baseTasks = data;
+    status.textContent = '';
+  } catch (error) {
+    status.textContent = '일정 파일을 읽지 못했습니다. 배포 주소로 열어 주세요';
+  }
+  // JSON을 먼저 읽고, 화면에서 추가해 브라우저에 저장한 일정만 뒤에 합칩니다.
+  tasks = baseTasks.concat(readAddedTasks());
+  renderTasks();
 }
 
 function weatherText(w) {
@@ -80,11 +96,11 @@ function addTask(e) {
     owner: document.getElementById('ownerInput').value.trim(),
   };
   if (!t.title || !t.owner) return;
-  const saved = JSON.parse(localStorage.getItem('wx_added') || '[]');
+  const saved = readAddedTasks();
   saved.push(t);
   localStorage.setItem('wx_added', JSON.stringify(saved));
   e.target.reset();
-  loadTasks();
+  tasks.push(t);
   renderTasks();
 }
 
